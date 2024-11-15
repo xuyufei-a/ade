@@ -5,7 +5,7 @@
   # Data files
   DATA_DIR: "data"
   STATS_DIR: "data/stats"
-  KV_DIR: "/share/projects/rewriting-knowledge/kvs"
+  KV_DIR: "share/projects/rewriting-knowledge/kvs"
 
   # Hyperparameters
   HPARAMS_DIR: "hparams"

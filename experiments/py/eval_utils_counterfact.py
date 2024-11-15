@@ -105,9 +105,9 @@ def compute_rewrite_quality_counterfact(
             for x in snips[rel_id][target_new["id"]]
             if x["name"] == record["requested_rewrite"]["subject"]
         ]
-        assert (
-            len(consistency_texts) > 0
-        ), "Must have consistency texts to evaluate generation"
+        # assert (
+        #     len(consistency_texts) > 0
+        # ), "Must have consistency texts to evaluate generation"
         gen_stats = test_generation(
             model,
             tok,
@@ -200,15 +200,17 @@ def test_generation(
     )
 
     ngram_entropy = n_gram_entropy(gen_texts)
-    consistency_tfidf = tfidf_similarity(
-        " ".join(gen_texts), " ".join(consistency_texts), vec
-    )
 
     ret = {
         "ngram_entropy": ngram_entropy,
-        "reference_score": consistency_tfidf,
         "text": gen_texts,
     }
+
+    if len(consistency_texts) > 0:
+        consistency_tfidf = tfidf_similarity(
+            " ".join(gen_texts), " ".join(consistency_texts), vec
+        )
+        ret.update({"reference_score": consistency_tfidf,})
 
     if len(essence_texts) > 0:
         ppl = perplexity(model, tok, " ".join(essence_texts), max_input_length=100)

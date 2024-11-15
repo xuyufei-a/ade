@@ -8,6 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from baselines.ft import FTHyperParams, apply_ft_to_model
+from baselines.context_ft import apply_context_ft_to_model
 from baselines.mend import MENDHyperParams, MendRewriteExecutor
 from dsets import (
     AttributeSnippets,
@@ -27,6 +28,7 @@ ALG_DICT = {
     "MEMIT": (MEMITHyperParams, apply_memit_to_model),
     "ROME": (ROMEHyperParams, apply_rome_to_model),
     "FT": (FTHyperParams, apply_ft_to_model),
+    "CONTEXT_FT": (FTHyperParams, apply_context_ft_to_model),
     "MEND": (MENDHyperParams, MendRewriteExecutor().apply_to_model),
 }
 
@@ -50,6 +52,7 @@ def main(
     dir_name: str,
     num_edits: int = 1,
     use_cache: bool = False,
+    no_edit: bool = False,
 ):
     # Set algorithm-specific variables
     params_class, apply_algo = ALG_DICT[alg_name]
@@ -107,6 +110,15 @@ def main(
 
     ds_class, ds_eval_method = DS_DICT[ds_name]
     ds = ds_class(DATA_DIR, tok=tok, size=dataset_size_limit)
+
+    # print(ds[0])
+    # if no_edit is True, set record['target_new'] = record['target_true']
+    if no_edit:
+        for record in ds:
+            record['requested_rewrite']['target_new'] = record['requested_rewrite']['target_true']
+    
+    # print(ds[0])
+    # exit()
 
     # Get cache templates
     cache_template = None
@@ -196,6 +208,7 @@ def main(
                 nethook.get_parameter(model, k)[...] = v.to("cuda")
 
         print("Evaluation took", time() - start)
+    print("Finished")
 
 
 def window(seq, n=2):
@@ -222,7 +235,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--alg_name",
-        choices=["MEMIT", "ROME", "FT", "MEND"],
+        choices=["MEMIT", "ROME", "FT", "MEND", "CONTEXT_FT"],
         default="ROME",
         help="Editing algorithm to use. Results are saved in results/<alg_name>/<run_id>, "
         "where a new run_id is generated on each run. "
@@ -231,7 +244,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model_name",
-        choices=["gpt2-medium", "gpt2-large", "gpt2-xl", "EleutherAI/gpt-j-6B"],
+        # choices=["gpt2-medium", "gpt2-large", "gpt2-xl", "EleutherAI/gpt-j-6B"],
         default="gpt2-xl",
         help="Model to edit.",
         required=True,
@@ -293,6 +306,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use cached k/v pairs",
     )
+    parser.add_argument(
+        "--no_edit",
+        action="store_true",
+        help="run alg on no edit pairs",
+    )
     parser.set_defaults(skip_generation_tests=False, conserve_memory=False)
     args = parser.parse_args()
 
@@ -309,4 +327,5 @@ if __name__ == "__main__":
         dir_name=args.alg_name,
         num_edits=args.num_edits,
         use_cache=args.use_cache,
+        no_edit=args.no_edit,
     )
