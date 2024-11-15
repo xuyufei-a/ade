@@ -12,8 +12,8 @@ from util import nethook
 from util.generate import generate_fast
 from util.globals import *
 
-from .ade_hparams import ADEHyperParams
 from memit.memit_main import get_context_templates
+from ade_hparams import ADEHyperParams
 
 # Cache variable(s)
 CONTEXT_TEMPLATES_CACHE = None
@@ -120,6 +120,14 @@ def execute_ade(
     )
     for name, w in model.named_parameters():
         w.requires_grad = name in weights
+    
+    # set weight projections to U[:, :r]
+    # use P ^ T W to project W to subspace
+    weight_projs = {
+        torch.linalg.svd(weight)[0] if hparams.ade_rank is None
+        else torch.linalg.svd(weight)[0][:, :hparams.ade_rank]
+        for name, weight in weights.item()
+    }
 
     # Update loop: intervene at layers simultaneously
     loss_meter = AverageMeter()
@@ -154,6 +162,10 @@ def execute_ade(
             # TODO: why neglect small loss value
             if loss.item() >= 1e-2:
                 loss.backward()
+
+                # update weights in ade way
+                update_gradient_by_ade(loss, weights, weight_projs, hparams)
+
                 opt.step()
 
             if type(hparams.norm_constraint) is float:
@@ -180,6 +192,79 @@ def execute_ade(
 
     return deltas
 
+def update_gradient_by_ade(loss, weights, weight_projs, hparams: ADEHyperParams):
+    if hparams.ade_method != "galore":
+        raise Exception(f"unemplemented ade_method {hparams.ade_method}")
+
+    restrain_method = RESTRAIN_METHOD_DICT[hparams.param_select]
+    for name, weight in weights.items():
+        weight.grad = weight_projs[name] @ restrain_method(weight_projs[name].T @ weight.grad, hparams, weight=weight)
+
+def valilla_param_select(weight_grad, hparams: ADEHyperParams, **kwargs):
+    return weight_grad
+
+def topk_param_select(weight_grad, hparams: ADEHyperParams, **kwargs):
+    weight = kwargs.pop("weight")
+    if hparams.param_select_metric == "change":
+        eps = hparams.div_eps
+        score = weight_grad.abs() / (weight.abs() + eps)
+    elif hparams.param_select_metric == "salience":
+        score = weight_grad.abs() * weight.abs()
+    elif hparams.param_select_metric == "valilla":
+        score = weight_grad.clone().abs()
+    else:
+        # TODO: maybe try pca
+        raise Exception(f"unimplemented param select metric {hparams.param_select_metric}")
+
+    shape = weight_grad.shape
+    flatten_weight_grad = weight_grad.flatten()
+    flatten_score = score.flatten()
+
+    num_zeros = int(flatten_score.numel() * hparams.zero_ratio)
+    zero_pos = np.argpartition(flatten_score.cpu().numpy(), num_zeros)[:num_zeros]
+
+    flatten_weight_grad[zero_pos] = 0
+    return flatten_weight_grad.reshape(shape)
+
+def randomk_param_select(weight_grad, hparams: ADEHyperParams, **kwargs):
+    shape = weight_grad.shape
+    flatten_weight_grad = weight_grad.flatten()
+
+    num_zeros = int(flatten_weight_grad.numel() * hparams.zero_ratio)
+    zero_pos = torch.randperm(int(flatten_weight_grad.numel()))[:num_zeros]
+
+    flatten_weight_grad[zero_pos] = 0
+    return flatten_weight_grad.reshape(shape)
+
+def direction_param_select(weight_grad, hparams: ADEHyperParams, **kwargs):
+    weight = kwargs.pop("weight")
+    if hparams.param_select_metric == "change":
+        eps = hparams.div_eps
+        score = weight_grad.abs() / (weight.abs() + eps)
+    elif hparams.param_select_metric == "salience":
+        score = weight_grad.abs() * weight.abs()
+    elif hparams.param_select_metric == "valilla":
+        score = weight_grad.clone().abs()
+    else:
+        # TODO: maybe try pca
+        raise Exception(f"unimplemented param select metric {hparams.param_select_metric}")
+
+    shape = weight_grad.shape
+    num_zeros = int(shape[0] * hparams.zero_ratio)
+
+    score = torch.sum(score, dim=1, keepdim=False)
+    zero_pos = np.argpartition(score.cpu().numpy(), num_zeros)[:num_zeros]
+
+    weight_grad[zero_pos, :] = 0
+    return weight_grad
+
+
+RESTRAIN_METHOD_DICT = {
+    "valilla": valilla_param_select, 
+    "topk": topk_param_select,
+    "randomk": randomk_param_select,
+    "direction": direction_param_select,
+}
 
 def chunks(arr, n):
     """Yield successive n-sized chunks from arr."""
@@ -210,3 +295,17 @@ class AverageMeter:
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+
+if __name__ == '__main__':
+    ## check param select method
+
+    # hparams = ADEHyperParams(param_select='valilla', param_select_metric='salience')
+
+    # a = torch.tensor([[0, 2, 3], [4, 5, 6]])
+    # a.grad = a.clone() - 1
+    
+    # print(valilla_param_select(a.grad, hparams, weight=a))
+    # print(topk_param_select(a.grad.clone(), hparams, weight=a.clone()))
+    # print(randomk_param_select(a.grad.clone(), hparams, weight=a.clone()))
+    # print(direction_param_select(a.grad.clone(), hparams, weight=a.clone()))
